@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>IDP Laser Structure Visualizer</title>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+
+        #error {
+            color: red;
+            margin-bottom: 5px;
+        }
+
+        main {
+            display: flex;
+            align-items: flex-start;
+        }
+
+        #canvas {
+            border: 1px solid black;
+        }
+
+        .timeControls {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        button {
+            margin: 0 5px;
+        }
+
+        .structureInput {
+            display: flex;
+            flex-direction: column;
+            margin-left: 10px;
+        }
+
+        .inputControls {
+            display: flex;
+            align-items: center;
+        }
+
+        .inputControls label {
+            margin-left: 5px;
+        }
+
+        .structureInputLabel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        #structInput {
+            width: 45vw;
+            height: 70vh;
+        }
+
+        @media (max-width: 750px) {
+            main {
+                flex-direction: column;
+            }
+
+            .structureInput {
+                margin: 10px 0;
+            }
+
+            #structInput {
+                width: 90vw;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<h1>IDP Laser Structure Visualizer</h1>
+
+<div id="error"></div>
+<main>
+    <div class="canvasArea">
+        <div class="timeControls">
+            <div>Time: <span id="time">0</span></div>
+            <button id="next">Next</button>
+            <button id="previous">Previous</button>
+        </div>
+        <canvas id="canvas"></canvas>
+    </div>
+    <div class="structureInput">
+        <label class="structureInputLabel" for="structInput">
+            Copy Paste the structure here:
+            <span class="inputControls">
+                <button id="visualize">Visualize</button>
+                <button id="clear">Clear</button>
+                <label>Wrap <input type="checkbox" checked onchange="inputTextarea.style.whiteSpace = this.checked ? 'normal' : 'pre'"></label>
+            </span>
+        </label>
+        <textarea id="structInput" spellcheck="false" placeholder="E.g.
+Time = { 0..6 }
+X = { 0..2 }
+Y = { 0..2 }
+I_MovingWall = {  }
+Laser = { 1,P(2,0),U; 2,P(2,1),U; 3,P(2,2),U }
+LaserEndPoint = { P(0,2) }
+Mirror = { P(0,0),Rm; P(1,0),Lm; P(1,2),Lm; P(2,2),Rm }
+MovingWall = {  }
+Prism = {  }
+ShootLaser = { 0 }
+StaticWall = {  }
+LaserStartDirection = U
+LaserStartPoint = P(2,0)
+Next = { 0->1; 1->2; 2->3; 3->4; 4->5; 5->6 }
+Start = 0"></textarea>
+    </div>
+</main>
+
+</body>
+<script>
+    const canvas = document.getElementById("canvas")
+    function resize() {
+        canvas.width = window.innerWidth > 750 ? Math.floor(window.innerWidth * 0.45) : Math.floor(window.innerWidth * 0.9)
+        canvas.height = Math.floor(window.innerHeight * 0.7)
+    }
+    resize()
+    window.addEventListener("resize", () => {
+        resize()
+    });
+    const ctx = canvas.getContext("2d");
+    const visualizeButton = document.getElementById("visualize")
+    const clearButton = document.getElementById("clear")
+    const inputTextarea = document.getElementById("structInput")
+    const nextButton = document.getElementById("next")
+    const previousButton = document.getElementById("previous")
+    const error = document.getElementById("error")
+    const timeDisplay = document.getElementById("time")
+
+    const requiredSymbols = [
+        "Time", "X", "Y", "I_MovingWall", "Laser", "LaserEndPoint", "Mirror", "MovingWall", "Prism", "ShootLaser", "StaticWall",
+        "LaserStartPoint", "LaserStartDirection", "Next", "Start"
+    ]
+
+    let time = 0;
+
+    function setTime(timeArg) {
+        time = timeArg
+        timeDisplay.innerText = time
+    }
+
+    let timeEnd;
+    let width;
+    let height;
+    let structure;
+
+    visualizeButton.onclick = () => {
+        error.innerText = ""
+        if (inputTextarea.value === "") {
+            return;
+        }
+        let lines = inputTextarea.value.trim().split("\n")
+        let pairs = lines.map((l) => l.replaceAll(" ", "").split("="))
+        let struct = Object.fromEntries(pairs)
+        const missing = requiredSymbols.find((s) => struct[s] === undefined)
+        if (missing) {
+            error.innerText = `Required symbol '${missing}' not present in structure`
+            return
+        }
+
+        setTime(0)
+        timeEnd = parseInt(struct.Time.match(/{0\.\.(\d+)}/)[1])
+        delete struct.Time
+        width = parseInt(struct.X.match(/{0\.\.(\d+)}/)[1]) + 1
+        delete struct.X
+        height = parseInt(struct.Y.match(/{0\.\.(\d+)}/)[1]) + 1
+        delete struct.Y
+
+        for (const symbol in struct) {
+            if (requiredSymbols.includes(symbol)) {
+                if (struct[symbol].startsWith("{")) {
+                    struct[symbol] = parseSet(struct[symbol])
+                } else {
+                    struct[symbol] = parseTuple(struct[symbol])
+                }
+            }
+        }
+
+        structure = struct
+
+        visualize()
+    }
+
+    clearButton.onclick = () => {
+        error.innerText = ""
+        inputTextarea.value = ""
+        inputTextarea.focus()
+    }
+
+    nextButton.onclick = next;
+
+    previousButton.onclick = previous;
+
+    canvas.onclick = next;
+
+    canvas.oncontextmenu = (e) => {
+        e.preventDefault();
+        previous();
+    };
+
+    function replaceAt(string, index, replacement) {
+        return string.substring(0, index) + replacement + string.substring(index + replacement.length);
+    }
+
+    /**
+     * @param {string} stringValue
+     */
+    function parseSet(stringValue) {
+        return stringValue.slice(1, -1).split(";").filter((s) => s.length > 0).map((t) => parseTuple(t))
+    }
+
+    /**
+     * @param {string} t
+     * @return {*[]}
+     */
+    function parseTuple(t) {
+        const matchPos1 = t.match(/P\(\d+,\d+\)/)
+        if (matchPos1) {
+            t = replaceAt(t, matchPos1.index + matchPos1[0].indexOf(","), "-")
+        }
+        const items = t.split(/,|->/)
+        let tuple = []
+        for (let item of items) {
+            if (/^\d+$/.test(item)) {
+                item = parseInt(item)
+            } else {
+                const matchPos2 = item.match(/P\((\d+)-(\d+)\)/)
+                if (matchPos2) {
+                    item = new Pos(parseInt(matchPos2[1]), parseInt(matchPos2[2]))
+                }
+            }
+            tuple.push(item)
+        }
+        if (tuple.length === 1) {
+            tuple = tuple[0]
+        }
+        return tuple
+    }
+
+    let origin = {x: 10, y: 10}
+    let squareSize = 128
+    let half = Math.round(squareSize / 2)
+    let quarter = Math.round(squareSize / 4)
+    let sixteenth = Math.round(squareSize / 16)
+    let thirtyTwo = Math.round(squareSize / 32)
+
+    function rescale() {
+        squareSize = Math.min(Math.round(canvas.width / (width + 1)), Math.round(canvas.height / (height + 1)))
+
+        origin.x = Math.round(canvas.width / 2 - width * squareSize / 2)
+        origin.y = Math.round(canvas.height / 2 - height * squareSize / 2)
+
+        half = Math.round(squareSize / 2)
+        quarter = Math.round(squareSize / 4)
+        sixteenth = Math.round(squareSize / 16)
+        thirtyTwo = Math.round(squareSize / 32)
+    }
+
+    window.addEventListener("resize", () => {
+        if (width) {
+            rescale()
+            visualize()
+        }
+    })
+
+    /**
+     * @param {number} j
+     * @return {number}
+     */
+    function x(j) {
+        return origin.x + j * squareSize + j
+    }
+
+    /**
+     * @param {number} i
+     * @return {number}
+     */
+    function y(i) {
+        return origin.y + i * squareSize + i
+    }
+
+    /**
+     * @param {number} i
+     * @param {number} j
+     * @param {string} color
+     */
+    function drawSquare(i, j, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x(j), y(i), squareSize, squareSize);
+    }
+
+    /**
+     * @param {number} i
+     * @param {number} j
+     */
+    function drawPrism(i, j) {
+        ctx.fillStyle = "#58b7d2";
+        ctx.fillRect(x(j) + quarter, y(i) + quarter, half, half);
+    }
+
+    /**
+     * @param {number} i
+     * @param {number} j
+     * @param {string} orientation
+     */
+    function drawMirror(i, j, orientation) {
+        ctx.fillStyle = "#58b7d2";
+        if (orientation === "Lm") {
+            ctx.beginPath();
+            ctx.moveTo(x(j) + sixteenth, y(i));
+            ctx.lineTo(x(j) + squareSize, y(i) + squareSize - sixteenth);
+            ctx.lineTo(x(j) + squareSize - sixteenth, y(i) + squareSize);
+            ctx.lineTo(x(j), y(i) + sixteenth);
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(x(j) + squareSize - sixteenth, y(i));
+            ctx.lineTo(x(j) + squareSize, y(i) + sixteenth);
+            ctx.lineTo(x(j) + sixteenth, y(i) + squareSize);
+            ctx.lineTo(x(j), y(i) + squareSize - sixteenth);
+            ctx.fill();
+        }
+    }
+
+
+
+    /**
+     * @param {number} i
+     * @param {number} j
+     * @param {string} direction
+     */
+    function drawLaser(i, j, direction) {
+        ctx.fillStyle = "red";
+        ctx.beginPath()
+        switch (direction) {
+            case "L":
+                ctx.moveTo(x(j) - half, y(i) + half)
+                ctx.lineTo(x(j) - half + thirtyTwo, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + half, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + half, y(i) + half + thirtyTwo)
+                ctx.lineTo(x(j) - half + thirtyTwo, y(i) + half + thirtyTwo)
+                break
+            case "R":
+                ctx.moveTo(x(j) + half, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + squareSize + half - thirtyTwo, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + squareSize + half, y(i) + half)
+                ctx.lineTo(x(j) + squareSize + half - thirtyTwo, y(i) + half + thirtyTwo)
+                ctx.lineTo(x(j) + half, y(i) + half + thirtyTwo)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + half)
+                break
+            case "U":
+                ctx.moveTo(x(j) + half, y(i) - half)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) - half + thirtyTwo)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + half, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) - half + thirtyTwo)
+                break
+            case "D":
+                ctx.moveTo(x(j) + half - thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + half, y(i) + half + thirtyTwo)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + squareSize + half - thirtyTwo)
+                ctx.lineTo(x(j) + half, y(i) + squareSize + half)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) + squareSize + half - thirtyTwo)
+                break
+        }
+        ctx.fill()
+    }
+
+    ctx.font = "14px sans-serif";
+    ctx.textAlign = "center"
+    ctx.textBaseline = "middle"
+
+    function visualize() {
+        rescale()
+
+        ctx.restore()
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = "black"
+        for (let x_n = 0; x_n < width; x_n++) {
+            ctx.fillText(x_n.toString(), x(width - 1 - x_n) + half, y(height - 1) + squareSize + sixteenth)
+        }
+        for (let y_n = 0; y_n < height; y_n++) {
+            ctx.fillText(y_n.toString(), x(width - 1) + squareSize + sixteenth, y(height - 1 - y_n) + half)
+        }
+
+        ctx.rect(origin.x, origin.y, width * squareSize + width, height * squareSize + height)
+        ctx.clip()
+
+        for (let i = 0; i < height; i++) {
+            for (let j = 0; j < width; j++) {
+                drawSquare(i, j, "#eeebe1")
+            }
+        }
+
+        for (const staticWallPos of structure["StaticWall"]) {
+            const {i, j} = posToIJ(staticWallPos)
+            drawSquare(i, j, "#5b7353")
+        }
+
+        for (const endPointPos of structure["LaserEndPoint"]) {
+            const {i, j} = posToIJ(endPointPos)
+            drawSquare(i, j, "#ffd08e")
+        }
+
+        const {i, j} = posToIJ(structure["LaserStartPoint"])
+        drawSquare(i, j, "#C1FF83")
+
+        for (const movingWall of structure["MovingWall"]) {
+            if (movingWall[0] === time) {
+                const {i, j} = posToIJ(movingWall[1])
+                drawSquare(i, j, "#a6ae9c")
+            }
+        }
+
+        for (const mirror of structure["Mirror"]) {
+            const {i, j} = posToIJ(mirror[0])
+            drawMirror(i, j, mirror[1])
+        }
+
+        for (const laser of structure["Laser"]) {
+            if (laser[0] === time) {
+                const {i, j} = posToIJ(laser[1])
+                drawLaser(i, j, laser[2])
+            }
+        }
+
+        for (const prismPos of structure["Prism"]) {
+            const {i, j} = posToIJ(prismPos)
+            drawPrism(i, j)
+        }
+    }
+
+    function mod(n, m) {
+        return ((n % m) + m) % m;
+    }
+
+    function next() {
+        if (!structure) {
+            return
+        }
+        setTime(mod(time + 1, timeEnd + 1))
+        visualize()
+    }
+
+    function previous() {
+        if (!structure) {
+            return
+        }
+        setTime(mod(time - 1, timeEnd + 1))
+        visualize()
+    }
+
+    /**
+     * Converts position to i and j with origin at top left
+     * @param {Pos} pos
+     * @return {{i: number, j: number}}
+     */
+    function posToIJ(pos) {
+        return {i: height - 1 - pos.y, j: width - 1 - pos.x}
+    }
+
+    class Pos {
+        /**
+         * @type {number}
+         */
+        x;
+
+        /**
+         * @type {number}
+         */
+        y;
+
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+</script>
+</html>
