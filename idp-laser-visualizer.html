@@ -129,6 +129,7 @@ Start = 0"></textarea>
         resize()
     });
     const ctx = canvas.getContext("2d");
+    ctx.save()
     const visualizeButton = document.getElementById("visualize")
     const clearButton = document.getElementById("clear")
     const inputTextarea = document.getElementById("structInput")
@@ -138,8 +139,7 @@ Start = 0"></textarea>
     const timeDisplay = document.getElementById("time")
 
     const requiredSymbols = [
-        "Time", "X", "Y", "I_MovingWall", "Laser", "LaserEndPoint", "Mirror", "MovingWall", "Prism", "ShootLaser", "StaticWall",
-        "LaserStartPoint", "LaserStartDirection", "Next", "Start"
+        "Time", "X", "Y", "Laser", "LaserEndPoint", "Mirror", "MovingWall", "Prism", "StaticWall", "LaserStartPoint"
     ]
 
     let time = 0;
@@ -332,7 +332,44 @@ Start = 0"></textarea>
         }
     }
 
+    /**
+     * @param {number} i
+     * @param {number} j
+     * @param {string} direction
+     */
+    function drawMovingWall(i, j, direction) {
+        ctx.globalAlpha = 0.5
+        drawSquare(i, j, "#8c9384")
+        ctx.globalAlpha = 1.0
 
+        ctx.fillStyle = "black"
+        ctx.beginPath()
+        switch (direction) {
+            case "L":
+                ctx.moveTo(x(j) + thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + sixteenth, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + sixteenth, y(i) + half + thirtyTwo)
+                break
+            case "R":
+                ctx.moveTo(x(j) + squareSize - thirtyTwo, y(i) + half)
+                ctx.lineTo(x(j) + squareSize - sixteenth, y(i) + half - thirtyTwo)
+                ctx.lineTo(x(j) + squareSize - sixteenth, y(i) + half + thirtyTwo)
+                break
+            case "U":
+                ctx.moveTo(x(j) + half, y(i) + thirtyTwo)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + sixteenth)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) + sixteenth)
+                break
+            case "D":
+                ctx.moveTo(x(j) + half, y(i) + squareSize - thirtyTwo)
+                ctx.lineTo(x(j) + half + thirtyTwo, y(i) + squareSize - sixteenth)
+                ctx.lineTo(x(j) + half - thirtyTwo, y(i) + squareSize - sixteenth)
+                break
+            default:
+                console.error("Moving wall default")
+        }
+        ctx.fill()
+    }
 
     /**
      * @param {number} i
@@ -379,24 +416,26 @@ Start = 0"></textarea>
         ctx.fill()
     }
 
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "center"
-    ctx.textBaseline = "middle"
-
     function visualize() {
+        ctx.restore()
+        ctx.save()
+
         rescale()
 
-        ctx.restore()
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         ctx.fillStyle = "black"
+        ctx.font = "14px sans-serif"
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
         for (let x_n = 0; x_n < width; x_n++) {
-            ctx.fillText(x_n.toString(), x(width - 1 - x_n) + half, y(height - 1) + squareSize + sixteenth)
+            ctx.fillText(x_n.toString(), x(width - 1 - x_n) + half, y(height - 1) + squareSize + 3 * thirtyTwo)
         }
         for (let y_n = 0; y_n < height; y_n++) {
             ctx.fillText(y_n.toString(), x(width - 1) + squareSize + sixteenth, y(height - 1 - y_n) + half)
         }
 
+        ctx.beginPath()
         ctx.rect(origin.x, origin.y, width * squareSize + width, height * squareSize + height)
         ctx.clip()
 
@@ -422,7 +461,7 @@ Start = 0"></textarea>
         for (const movingWall of structure["MovingWall"]) {
             if (movingWall[0] === time) {
                 const {i, j} = posToIJ(movingWall[1])
-                drawSquare(i, j, "#a6ae9c")
+                drawMovingWall(i, j, movingWall[2])
             }
         }
 
